@@ -7,7 +7,7 @@ export interface AppConfig {
   port: number;
 }
 
-const rootDir = path.resolve(import.meta.dirname, '..');
+const rootDir = process.cwd();
 
 let appConfig: AppConfig = { port: 3000 };
 const configPath = path.join(rootDir, 'config.yaml');

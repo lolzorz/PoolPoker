@@ -14,8 +14,9 @@ pnpm install          # install dependencies
 pnpm run dev          # run backend (tsx watch) + frontend (Vite HMR) concurrently
 pnpm run dev:backend  # backend only, watch mode (server/index.ts, port 3000)
 pnpm run dev:frontend # Vite dev server only (port 5173, proxies /socket.io → :3000)
-pnpm run build        # vue-tsc type-check + Vite production build → dist/
-pnpm start            # pnpm run build && tsx server/index.ts
+pnpm run build        # vue-tsc type-check + Vite production build → dist/ + server/shared compile → dist-server/
+pnpm run build:server # tsc -p tsconfig.server.json (server/ + shared/ → CommonJS JS in dist-server/, Node 16-safe)
+pnpm start            # pnpm run build && node dist-server/server/index.js
 pnpm run preview      # serve the built dist/
 pnpm run test:unit    # Vitest unit tests for server domain logic
 pnpm run test:e2e     # Playwright end-to-end tests (single chromium project)
@@ -28,6 +29,7 @@ pnpm run format       # biome format --write .
 - The e2e config auto-starts the server via `pnpm start` (reuses an existing server on `http://127.0.0.1:3000`).
 - **Husky** runs on commit: `pre-commit` → `pnpm exec vue-tsc --noEmit` + `pnpm exec lint-staged` (biome); `commit-msg` → commitlint (conventional commits required).
 - Unit tests use **Vitest** for fast deterministic domain logic testing. Playwright is used for E2E tests.
+- **Production runtime targets Node 16.** `pnpm install`/`pnpm run build` require Node ≥24 (per `engines.node`), but the compiled production server (`dist-server/server/index.js`, built by `pnpm run build:server` via `tsconfig.server.json`) only uses Node 16-compatible runtime APIs and is started with plain `node` (no `tsx`, which itself requires Node ≥18). This lets the build run on a modern Node toolchain while the deployed long-running process runs on a Node 16 host. `dev:backend` still uses `tsx watch` and is unaffected (dev-only).
 
 ## Architecture
 

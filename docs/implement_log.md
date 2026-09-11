@@ -250,3 +250,21 @@
 - **验收**：`npm run build`（vue-tsc + vite）通过；变更文件 Biome 检查通过。
 - **commit**：未提交（工作区改动）
 
+### 第26轮：生产运行时兼容 Node 16 [2026-09-11]
+- **输入**：上一轮提交把工具链整体升到 Node 24 / TS 5.8（`engines.node` 改成 `>=24.0.0`）。用户要求：部署 server 的目标主机即使只有 Node 16，生产运行时也要能跑起来，范围限定为「仅生产运行时（server 进程）」——`pnpm install` / `vite build` / `vue-tsc` / 单测等开发链路仍可留在 Node 24。
+- **探索与决策**：
+  - grep + `npm view <pkg> engines` 排查出两类阻塞点：①运行时 API——`server/config.ts` 的 `import.meta.dirname`（Node 20.11+/21.2+ 才有）、`server/wecomWebhook.ts` 两处全局 `fetch`（Node 18+ 才有）；②生产启动方式本身依赖 Node 18+——`pnpm start` 直接用 `tsx server/index.ts`，而 `tsx@4` 的 `engines.node` 是 `>=18.0.0`，光修好 API 不够，只要生产还靠 `tsx` 跑 `.ts`，Node16 主机就起不来。express（`>=0.10.0`）、socket.io（`>=10.2.0`）、socket.io-client（`>=10.0.0`）、js-yaml、`crypto.randomInt/randomUUID/randomBytes` 核实均兼容 Node16，未改动；`vite.config.ts`/`vitest.config.ts` 里的 `import.meta.dirname` 只在 Node24 构建阶段执行，不动。
+  - `rootDir` 改为 `process.cwd()`：server 无论 dev（`tsx server/index.ts`）还是编译后生产运行都从仓库根目录启动（pnpm 脚本、`run.sh` 均先 `cd` 到项目根），`process.cwd()` 与原 `import.meta.dirname` 算出的根目录等价，且在 ESM 与编译后 CommonJS 下都合法（`import.meta` 在编译成 CommonJS 时会被 tsc 直接报错）。
+  - `fetch` 替换方案对比：node-fetch v3 是 ESM-only，编译成 CommonJS 后 `require` 会报 `ERR_REQUIRE_ESM`；v2 虽兼容但没必要新增依赖——最终手写基于 `node:http`/`node:https` 的最小 `postJson(url, body)`，返回 `{ status, ok, json() }`（`json()` 走 `Promise.resolve(JSON.parse(data))`），使两处调用点 `res.ok`/`res.status`/`await res.json()` 完全不用改。
+  - 生产启动脱离 `tsx`：新增独立 `tsconfig.server.json`（不 extend 根 `tsconfig.json`，避免继承 `moduleResolution: bundler`/`allowImportingTsExtensions` 等与 CommonJS 输出冲突的选项），把 `server/**/*.ts` + `shared/**/*.ts` 编译成 CommonJS 到 `dist-server/`；因 `rootDir` 设为 `.`，产物保留了 `server/` 子目录层级，实际入口是 `dist-server/server/index.js`（不是 `dist-server/index.js`）。根 `package.json` 是 `"type": "module"`，额外在 `dist-server/package.json` 写 `{"type":"commonjs"}` 覆盖，让 Node 把编译产物当 CommonJS 解析。`engines.node` 保持 `>=24.0.0` 不变——它描述的是 `pnpm install`/构建链路的要求，编译产物用裸 `node` 执行时根本不走这个检查。未改 `run.sh`/`webhook-deploy.sh`（不在本次范围内）。
+- **最终改动**：
+  - `server/config.ts` — 修改：`rootDir` 由 `path.resolve(import.meta.dirname, '..')` 改为 `process.cwd()`。
+  - `server/wecomWebhook.ts` — 新增：基于 `node:http`/`node:https` 的 `postJson(url, body)` helper；两处 `sendRoundResultToWecom`/`sendCrashReportToWecom` 里的 `fetch(...)` 调用替换为 `postJson(...)`。
+  - `tsconfig.server.json` — 新增：独立 tsc 配置（target ES2020、module CommonJS、moduleResolution Node、esModuleInterop、outDir `dist-server`、rootDir `.`），`include` server/shared，`exclude` `server/__tests__`。
+  - `package.json` — 修改：新增 `build:server`（`tsc -p tsconfig.server.json && echo '{"type":"commonjs"}' > dist-server/package.json`）；`build` 追加 `&& pnpm run build:server`；`start` 改为 `pnpm run build && node dist-server/server/index.js`（不再用 `tsx`）；`dev:backend` 不变。
+  - `.gitignore` — 修改：新增 `dist-server/`。
+  - `AGENTS.md` — 修改：Commands 一节更新 `build`/`start` 说明，新增一条 Node16 生产运行时兼容性说明。
+- **验收**：`pnpm exec tsc -p tsconfig.server.json` 编译无报错；`pnpm run build`（vue-tsc + vite build + build:server）在 Node22 全部通过；用 nvm 临时安装真实 Node 16.20.2，直接 `node dist-server/server/index.js` 启动，`curl /api/ball-configs`、`curl /api/robot-url`、`curl /`（dist 静态资源）均返回 200 且内容正常；切回 Node22 跑 `pnpm run test:unit`，18 个单测全部通过，确认 `process.cwd()` 改动无回归。
+- **commit**：未提交（工作区改动）
+
+

@@ -30,6 +30,7 @@
   - 撤回采用快照栈：`ServerRoom.gameHistory` 存每步操作后的 `GameState` 快照（深拷贝，不含日志），每步操作 `recordGameStep` push、撤回 `undoGameStep` pop 回退到上一步；每局 `start_game` 清空并播种发牌完成基线，历史只剩基线时撤回无效果；`gameHistory` 不下发客户端。
   - 身份校验：每个玩家持有 `sessionToken`（`crypto.randomUUID`），`rejoin_room` 重连必须校验 token，防止会话劫持。
   - 随机性统一用 `node:crypto` CSPRNG（洗牌 `crypto.randomInt`、房间码 `crypto.randomInt`、token `crypto.randomUUID`），不使用 `Math.random`。
+  - 生产运行时兼容 Node 16：`server/` 与 `shared/` 的运行时代码禁止使用 Node 16 之后才有的全局 API（如 `import.meta.dirname`、全局 `fetch`）——`config.ts` 用 `process.cwd()` 定位仓库根目录，`wecomWebhook.ts` 用基于 `node:http`/`node:https` 手写的 `postJson` 替代全局 `fetch`。生产启动不依赖要求 Node ≥18 的 `tsx`：经 `tsconfig.server.json` 把 `server/` + `shared/` 编译为 CommonJS（`dist-server/`），用裸 `node dist-server/server/index.js` 启动。开发/构建链路（`pnpm install` / `vite build` / `vue-tsc` / `tsx watch`）仍要求 Node ≥24，两者互不影响。
 
 ### 目录结构
 
@@ -59,7 +60,7 @@ PoolPoker/
 ├── ball_configs.json        # 球色主题配置（default / xingpai）
 ├── config.yaml              # 端口与房间默认设置
 ├── run.sh / webhook-deploy.sh  # 一键构建运行 / Webhook 自动部署
-└── vite.config.ts / tsconfig.json / biome.json / commitlint.config.js
+└── vite.config.ts / tsconfig.json / tsconfig.server.json / biome.json / commitlint.config.js
 ```
 
 ---
@@ -142,7 +143,7 @@ PoolPoker/
 
 ### 工程化与测试
 
-- 构建链：Vite + `vue-tsc` 类型检查；`@/` 指向 `src`、`@shared/` 指向 `shared` 的路径别名；Biome 做 lint/format，Husky `pre-commit` + lint-staged、`commit-msg` + commitlint（conventional commits）；`tsx` 运行后端。
+- 构建链：Vite + `vue-tsc` 类型检查前端；`server/` + `shared/` 另经 `tsconfig.server.json`（`tsc`，target ES2020/CommonJS）编译到 `dist-server/`，生产环境用裸 `node dist-server/server/index.js` 启动（兼容 Node 16，不依赖 `tsx`）；开发态 `dev:backend` 仍用 `tsx watch` 直接跑 TS。`@/` 指向 `src`、`@shared/` 指向 `shared` 的路径别名；Biome 做 lint/format，Husky `pre-commit` + lint-staged、`commit-msg` + commitlint（conventional commits）。
 - `e2e/poolpoker.spec.ts`：Playwright 端到端测试，覆盖玩家资料持久化、多人房间同步、销牌/置灰/意外进球/撤回/罚牌/重开、累计胜负、多人同时胜利与下局首击顺序、裁判代记等全流程。
 
 ---
@@ -152,12 +153,12 @@ PoolPoker/
 | 文件路径 |
 |----------|
 | `server/index.ts`（Express + Socket.IO 启动、`/api/ball-configs`、`/api/rooms/:code` 快照接口、静态托管） |
-| `server/config.ts`（config.yaml / ball_configs.json 加载、`isValidBallConfigKey`） |
+| `server/config.ts`（config.yaml / ball_configs.json 加载、`isValidBallConfigKey`；`rootDir` 用 `process.cwd()` 定位，兼容 Node 16 生产运行时） |
 | `server/logger.ts`（socket 连接/断开日志，时间戳 + 用户名） |
 | `server/pokerDeck.ts`（54 张牌库、CSPRNG 洗牌） |
 | `server/gameEngine.ts`（胜负判定、积分结算、击球顺序） |
 | `server/gameState.ts`（游戏进行态快照、记录、撤回 gameHistory 栈） |
-| `server/wecomWebhook.ts`（每局结算推送企业微信机器人） |
+| `server/wecomWebhook.ts`（每局结算推送企业微信机器人；`postJson` 基于 `node:http`/`node:https` 手写实现，替代全局 `fetch` 以兼容 Node 16） |
 | `server/robotConfig.ts`（机器人 Webhook 链接运行时配置） |
 | `server/roomManager.ts`（内存房间表、房间码生成、状态裁剪防泄露、广播） |
 | `server/socketHandlers.ts`（15 个 Socket 事件处理器、sessionToken 校验） |
@@ -172,7 +173,8 @@ PoolPoker/
 | `ball_configs.json`（default / xingpai 球色主题） |
 | `config.yaml`（端口、房间默认设置） |
 | `run.sh`（一键构建运行）/ `webhook-deploy.sh`（Webhook 自动部署） |
-| `vite.config.ts` / `tsconfig.json` / `tailwind.config.js` / `postcss.config.mjs` / `biome.json` / `commitlint.config.js` / `.husky/` |
+| `vite.config.ts` / `tsconfig.json` / `tsconfig.server.json`（server/shared 编译为 CommonJS，供 `dist-server/` 生产运行）/ `tailwind.config.js` / `postcss.config.mjs` / `biome.json` / `commitlint.config.js` / `.husky/` |
+| `package.json`（`build` 含 `build:server`；`start` 用裸 `node dist-server/server/index.js` 而非 `tsx`） |
 
 ---
 

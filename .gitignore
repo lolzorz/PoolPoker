@@ -2,6 +2,7 @@
 node_modules/
 .pnpm-store/
 dist/
+dist-server/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

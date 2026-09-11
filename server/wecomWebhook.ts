@@ -1,3 +1,6 @@
+import http from 'node:http';
+import https from 'node:https';
+import { URL } from 'node:url';
 import type { ServerRoom } from '../shared/types/game';
 import { getPocketedBallNumbers } from './gameEngine';
 import { getRobotWebhookUrl } from './robotConfig';
@@ -5,6 +8,42 @@ import { rooms } from './roomManager';
 
 // 固定提及成员
 const WECOM_MENTIONED_LIST = ['shyren'];
+
+// 生产运行时需兼容 Node 16（无全局 fetch），改用 node:http(s) 实现最小 POST JSON 请求
+function postJson(url: string, body: unknown): Promise<{ status: number; ok: boolean; json: () => Promise<unknown> }> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const payload = JSON.stringify(body);
+    const request = (target.protocol === 'http:' ? http : https).request(
+      target,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          const status = res.statusCode || 0;
+          resolve({
+            status,
+            ok: status >= 200 && status < 300,
+            json: () => Promise.resolve(JSON.parse(data)),
+          });
+        });
+      }
+    );
+    request.on('error', reject);
+    request.write(payload);
+    request.end();
+  });
+}
 
 let isPushDisabledOverride: boolean | null = null;
 
@@ -56,11 +95,7 @@ export async function sendRoundResultToWecom(room: ServerRoom): Promise<void> {
   };
 
   try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message),
-    });
+    const res = await postJson(webhookUrl, message);
 
     if (!res.ok) {
       console.warn(`⚠️ [WeCom] 推送本局结果失败 (房间 ${room.code}, HTTP ${res.status})`);
@@ -135,11 +170,7 @@ export async function sendCrashReportToWecom(error: Error | unknown, type: strin
   };
 
   try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message),
-    });
+    const res = await postJson(webhookUrl, message);
 
     if (res.ok) {
       console.log('✅ [WeCom] 已发送崩溃对战告警信息');
